@@ -1,0 +1,734 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Piano Video Maker</title>
+</head>
+<body style="background:#0a0a0c;color:#fff;margin:0;display:flex;flex-direction:column;align-items:center;padding-bottom:50px;user-select:none;">
+    <!-- 上部操作バー -->
+    <div style="padding:15px;background:#18181c;width:100%;display:flex;justify-content:space-between;align-items:center;box-sizing:border-box;border-bottom:1px solid #333;flex-wrap:wrap;gap:10px;">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+            <button onclick="clearAllNotes()" style="background:#aa2222;color:#fff;padding:6px 12px;border:none;border-radius:4px;cursor:pointer;">全削除</button>
+            
+            <span style="font-size:14px;">操作モード:</span>
+            <button id="modeBtn" onclick="toggleEditMode()" style="background:#1155ff;color:#fff;font-weight:bold;padding:6px 12px;border:1px solid #55ccff;border-radius:4px;cursor:pointer;">✏️ 配置モード (Shiftキーで切替)</button>
+
+            <span style="font-size:14px;margin-left:5px;">手:</span>
+            <button id="handBtn" onclick="toggleHand()" style="background:#1155ff;color:#fff;font-weight:bold;padding:6px 12px;border:1px solid #55ccff;border-radius:4px;">左手</button>
+
+            <!-- カラーテーマ -->
+            <label style="font-size:14px;">カラーテーマ: 
+                <select id="themeSelect" style="padding:4px;border-radius:4px;background:#222;color:#fff;border:1px solid #555;">
+                    <option value="pinkGrad">🔮 ファンタジーピンク (ピンク/紫/青グラデ)</option>
+                    <option value="pink">🌸 サクラピンク (単色ネオン)</option>
+                </select>
+            </label>
+
+            <!-- 落下速度（SPEED）数値入力 -->
+            <label style="font-size:14px;">ノーツ速度: 
+                <input type="number" id="speedInput" min="20" max="1000" step="10" value="180" style="width:60px;padding:4px;border-radius:4px;background:#222;color:#fff;border:1px solid #555;text-align:center;" onchange="updateSpeedFromInput()">
+            </label>
+
+            <!-- ノーツ長スライダー -->
+            <label style="font-size:14px;">ノーツ長: 
+                <input type="range" id="lengthSlider" min="0.5" max="10" step="0.5" value="1" style="vertical-align:middle;width:80px;" oninput="updateLengthLabel()">
+                <span id="lengthVal">1x</span>
+            </label>
+
+            <label style="font-size:14px;">音量: 
+                <input type="range" id="volumeSlider" min="0" max="1" step="0.05" value="0.8" style="vertical-align:middle;width:80px;">
+            </label>
+
+            <button onclick="togglePlay()" style="background:#00aa55;color:#fff;font-weight:bold;padding:6px 12px;border:none;border-radius:4px;cursor:pointer;">▶ 再生 / 一時停止</button>
+            <button onclick="resetAnim()">最初に戻る</button>
+        </div>
+
+        <!-- 保存・読み込み・背景動画エリア -->
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <button onclick="document.getElementById('bgVideoInput').click()" style="background:#8833cc;color:#fff;font-weight:bold;padding:6px 12px;border-radius:4px;border:none;cursor:pointer;">🎥 背景動画を選択</button>
+            <button onclick="clearBgVideo()" style="background:#666666;color:#fff;padding:6px 12px;border-radius:4px;border:none;cursor:pointer;">🎥 動画を削除</button>
+            <input type="file" id="bgVideoInput" accept="video/*" style="display:none;" onchange="loadBgVideo(event)">
+
+            <button onclick="saveToFile()" style="background:#2277aa;color:#fff;font-weight:bold;padding:6px 12px;border-radius:4px;border:none;cursor:pointer;">💾 ファイル保存</button>
+            <button onclick="document.getElementById('fileInput').click()" style="background:#22aa77;color:#fff;font-weight:bold;padding:6px 12px;border-radius:4px;border:none;cursor:pointer;">📂 ファイル読み込み</button>
+            <input type="file" id="fileInput" accept=".json" style="display:none;" onchange="loadFromFile(event)">
+        </div>
+    </div>
+
+    <!-- メインCanvas＋右下動画録画ボタンエリア -->
+    <div style="width:1280px;margin-top:10px;">
+        <canvas id="canvas" width="1280" height="720" style="border:1px solid #333;background:#000;box-shadow: 0 0 25px rgba(0,0,0,0.9);display:block;cursor:crosshair;"></canvas>
+        
+        <div style="display:flex;justify-content:flex-end;margin-top:10px;">
+            <button id="recBtn" onclick="toggleRecord()" style="background:#cc0000;color:#fff;font-size:15px;font-weight:bold;padding:10px 20px;border:2px solid #ff4444;border-radius:6px;box-shadow: 0 4px 10px rgba(0,0,0,0.5);cursor:pointer;">🎬 動画録画開始</button>
+        </div>
+    </div>
+
+    <!-- 隠しvideo要素（背景動画描画用） -->
+    <video id="bgVideo" style="display:none;" loop muted playsinline></video>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const bgVideo = document.getElementById('bgVideo');
+        let hasBgVideo = false;
+        let bgVideoDataUrl = "";
+
+        const CANVAS_WIDTH = 1280, CANVAS_HEIGHT = 720, KEYBOARD_HEIGHT = 162, NUM_WHITE_KEYS = 52;
+        const WHITE_KEY_WIDTH = CANVAS_WIDTH / NUM_WHITE_KEYS;
+        let isPlaying = false, currentTime = 0, lastTimestamp = 0, SPEED = 180;
+        
+        const BASE_ROW_HEIGHT = 28;
+        let notesData = [];
+
+        let currentHand = 'left';
+        let editMode = 'add';
+
+        const colorThemes = {
+            pinkGrad: {
+                isGradMode: true,
+                left:  { stops: ['#ff88dd', '#c055ff', '#3377ff'], glow: '#ff66cc' },
+                right: { stops: ['#ff66aa', '#aa33ff', '#00aaff'], glow: '#ff33aa' }
+            },
+            pink: {
+                isGradMode: false,
+                left:  { whiteBase: '#ff66cc', whiteGlow: '#ffb3e6', blackBase: '#cc0088', blackGlow: '#ff33bb' },
+                right: { whiteBase: '#ff3399', whiteGlow: '#ff88c2', blackBase: '#990066', blackGlow: '#cc0088' }
+            }
+        };
+
+        function updateSpeedFromInput() {
+            const inputVal = parseFloat(document.getElementById('speedInput').value);
+            if (!isNaN(inputVal) && inputVal > 0) {
+                SPEED = inputVal;
+            }
+        }
+
+        const keys = [];
+        const isMidiBlack = [false, true, false, true, false, false, true, false, true, false, true, false];
+        let whiteCount = 0;
+
+        for (let midi = 21; midi <= 108; midi++) {
+            const isBlack = isMidiBlack[midi % 12];
+            if (!isBlack) {
+                keys.push({
+                    midi: midi,
+                    isBlack: false,
+                    x: whiteCount * WHITE_KEY_WIDTH,
+                    width: WHITE_KEY_WIDTH,
+                    active: false,
+                    activeColor: '#ffffff'
+                });
+                whiteCount++;
+            } else {
+                keys.push({
+                    midi: midi,
+                    isBlack: true,
+                    x: (whiteCount - 1) * WHITE_KEY_WIDTH + (WHITE_KEY_WIDTH * 0.75),
+                    width: WHITE_KEY_WIDTH * 0.5,
+                    active: false,
+                    activeColor: '#ffffff'
+                });
+            }
+        }
+
+        let audioCtx = null;
+
+        function initAudioEngine() {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            if (audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+        }
+
+        function playPianoSound(midi, durationSec) {
+            initAudioEngine();
+            const volSlider = parseFloat(document.getElementById('volumeSlider').value);
+            if (volSlider <= 0) return;
+
+            const now = audioCtx.currentTime;
+            const freq = 440 * Math.pow(2, (midi - 69) / 12);
+            const dur = Math.max(durationSec || 0.5, 0.3);
+
+            const osc1 = audioCtx.createOscillator();
+            const gain1 = audioCtx.createGain();
+            osc1.type = 'sine';
+            osc1.frequency.setValueAtTime(freq, now);
+
+            const osc2 = audioCtx.createOscillator();
+            const gain2 = audioCtx.createGain();
+            osc2.type = 'triangle';
+            osc2.frequency.setValueAtTime(freq * 2, now);
+
+            const mainVol = volSlider * 0.8;
+            gain1.gain.setValueAtTime(mainVol, now);
+            gain1.gain.exponentialRampToValueAtTime(0.001, now + dur + 0.3);
+
+            gain2.gain.setValueAtTime(mainVol * 0.3, now);
+            gain2.gain.exponentialRampToValueAtTime(0.001, now + dur + 0.1);
+
+            osc1.connect(gain1);
+            gain1.connect(audioCtx.destination);
+            osc2.connect(gain2);
+            gain2.connect(audioCtx.destination);
+
+            osc1.start(now);
+            osc2.start(now);
+            osc1.stop(now + dur + 0.3);
+            osc2.stop(now + dur + 0.3);
+        }
+
+        function toggleEditMode() {
+            const btn = document.getElementById('modeBtn');
+            if (editMode === 'add') {
+                editMode = 'delete';
+                btn.innerText = '🗑️ 削除モード (Shiftキーで切替)';
+                btn.style.background = '#cc2222';
+                btn.style.borderColor = '#ff6666';
+            } else {
+                editMode = 'add';
+                btn.innerText = '✏️ 配置モード (Shiftキーで切替)';
+                btn.style.background = '#1155ff';
+                btn.style.borderColor = '#55ccff';
+            }
+        }
+
+        window.addEventListener('keydown', (e) => {
+            if (e.key === 'Shift') {
+                toggleEditMode();
+            }
+        });
+
+        canvas.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            const scrollSpeed = 0.0025;
+            currentTime = Math.max(0, currentTime + (e.deltaY * scrollSpeed));
+
+            notesData.forEach(n => {
+                if (n.targetTime >= currentTime - 0.05) {
+                    n.played = false;
+                }
+            });
+        }, { passive: false });
+
+        function loadBgVideo(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(evt) {
+                bgVideoDataUrl = evt.target.result;
+                bgVideo.src = bgVideoDataUrl;
+                bgVideo.load();
+                bgVideo.onloadeddata = () => {
+                    hasBgVideo = true;
+                    bgVideo.play();
+                };
+            };
+            reader.readAsDataURL(file);
+        }
+
+        // 背景動画消去機能
+        function clearBgVideo() {
+            hasBgVideo = false;
+            bgVideoDataUrl = "";
+            bgVideo.pause();
+            bgVideo.removeAttribute('src');
+            bgVideo.load();
+            document.getElementById('bgVideoInput').value = "";
+        }
+
+        function updateLengthLabel() {
+            document.getElementById('lengthVal').innerText = document.getElementById('lengthSlider').value + 'x';
+        }
+
+        function toggleHand() {
+            const btn = document.getElementById('handBtn');
+            if (currentHand === 'left') {
+                currentHand = 'right';
+                btn.innerText = '右手';
+                btn.style.background = '#00aa33';
+                btn.style.borderColor = '#88ff33';
+            } else {
+                currentHand = 'left';
+                btn.innerText = '左手';
+                btn.style.background = '#1155ff';
+                btn.style.borderColor = '#55ccff';
+            }
+        }
+
+        function clearAllNotes() { notesData = []; currentTime = 0; isPlaying = false; }
+
+        function saveToFile() {
+            const dataToSave = {
+                speed: SPEED,
+                bgVideoDataUrl: bgVideoDataUrl,
+                hasBgVideo: hasBgVideo,
+                notes: notesData.map(n => ({
+                    midi: n.midi,
+                    targetTime: n.targetTime,
+                    hand: n.hand,
+                    lengthMult: n.lengthMult
+                }))
+            };
+            const jsonStr = JSON.stringify(dataToSave, null, 2);
+            const blob = new Blob([jsonStr], { type: 'application/json' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = 'piano_song.json';
+            a.click();
+        }
+
+        function loadFromFile(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                try {
+                    const loadedData = JSON.parse(event.target.result);
+                    if (loadedData.speed) {
+                        SPEED = loadedData.speed;
+                        document.getElementById('speedInput').value = SPEED;
+                    }
+                    
+                    if (loadedData.hasBgVideo && loadedData.bgVideoDataUrl) {
+                        bgVideoDataUrl = loadedData.bgVideoDataUrl;
+                        bgVideo.src = bgVideoDataUrl;
+                        bgVideo.load();
+                        bgVideo.onloadeddata = () => {
+                            hasBgVideo = true;
+                            if (isPlaying) bgVideo.play();
+                        };
+                    } else {
+                        clearBgVideo();
+                    }
+
+                    notesData = loadedData.notes.map(n => {
+                        return {
+                            midi: n.midi,
+                            targetTime: n.targetTime,
+                            hand: n.hand,
+                            lengthMult: n.lengthMult || 1,
+                            played: false
+                        };
+                    });
+                    resetAnim();
+                    alert('プロジェクトを正常に読み込みました！');
+                } catch (err) {
+                    alert('ファイルの読み込みに失敗しました。');
+                }
+            };
+            reader.readAsText(file);
+        }
+
+        function getTargetKeyByX(clickX, clickY, hitY) {
+            let clickedKey = null;
+
+            for (let k of keys) {
+                if (k.isBlack) {
+                    if (clickX >= k.x && clickX <= (k.x + k.width)) {
+                        clickedKey = k;
+                        break;
+                    }
+                }
+            }
+
+            if (!clickedKey) {
+                let minDist = 999;
+                for (let k of keys) {
+                    if (!k.isBlack) {
+                        const keyCenter = k.x + (k.width / 2);
+                        const dist = Math.abs(clickX - keyCenter);
+                        if (dist < minDist) {
+                            minDist = dist;
+                            clickedKey = k;
+                        }
+                    }
+                }
+            }
+            return clickedKey;
+        }
+
+        let draggingNote = null;
+        let dragEdge = null;
+        let isMouseDown = false;
+        let mouseStartPos = { x: 0, y: 0 };
+
+        function hitTestNoteEdge(clickX, clickY) {
+            const hitY = CANVAS_HEIGHT - KEYBOARD_HEIGHT;
+
+            for (let i = notesData.length - 1; i >= 0; i--) {
+                const note = notesData[i];
+                const keyInfo = keys.find(k => k.midi === note.midi);
+                if (!keyInfo) continue;
+
+                const noteHeight = BASE_ROW_HEIGHT * (note.lengthMult || 1);
+                const noteBottomY = hitY - ((note.targetTime - currentTime) * SPEED);
+                const noteTopY = noteBottomY - noteHeight;
+
+                let width, x;
+                if (keyInfo.isBlack) {
+                    width = Math.max(keyInfo.width * 0.8, 3);
+                    x = keyInfo.x + (keyInfo.width - width) / 2;
+                } else {
+                    width = Math.max(keyInfo.width * 0.7, 4);
+                    x = keyInfo.x + (keyInfo.width - width) / 2;
+                }
+
+                if (clickX >= x - 4 && clickX <= x + width + 4) {
+                    if (Math.abs(clickY - noteTopY) <= 10) {
+                        return { note, edge: 'top' };
+                    }
+                    if (Math.abs(clickY - noteBottomY) <= 10) {
+                        return { note, edge: 'bottom' };
+                    }
+                    if (clickY >= noteTopY && clickY <= noteBottomY) {
+                        return { note, edge: 'center' };
+                    }
+                }
+            }
+            return null;
+        }
+
+        canvas.addEventListener('mousedown', (e) => {
+            initAudioEngine();
+            const rect = canvas.getBoundingClientRect();
+            const clickX = e.clientX - rect.left;
+            const clickY = e.clientY - rect.top;
+
+            mouseStartPos = { x: clickX, y: clickY };
+
+            const hitResult = hitTestNoteEdge(clickX, clickY);
+            if (hitResult && (hitResult.edge === 'top' || hitResult.edge === 'bottom')) {
+                draggingNote = hitResult.note;
+                dragEdge = hitResult.edge;
+                isMouseDown = true;
+            } else {
+                isMouseDown = true;
+            }
+        });
+
+        canvas.addEventListener('mousemove', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            const mouseX = e.clientX - rect.left;
+            const mouseY = e.clientY - rect.top;
+
+            if (!draggingNote) {
+                const hoverResult = hitTestNoteEdge(mouseX, mouseY);
+                if (hoverResult && (hoverResult.edge === 'top' || hoverResult.edge === 'bottom')) {
+                    canvas.style.cursor = 'ns-resize';
+                } else {
+                    canvas.style.cursor = 'crosshair';
+                }
+            }
+
+            if (!draggingNote || !isMouseDown) return;
+
+            const hitY = CANVAS_HEIGHT - KEYBOARD_HEIGHT;
+
+            if (dragEdge === 'top') {
+                const noteBottomY = hitY - ((draggingNote.targetTime - currentTime) * SPEED);
+                const newNoteHeight = Math.max(BASE_ROW_HEIGHT * 0.3, noteBottomY - mouseY);
+                draggingNote.lengthMult = newNoteHeight / BASE_ROW_HEIGHT;
+            } else if (dragEdge === 'bottom') {
+                const distFromHitY = hitY - mouseY;
+                draggingNote.targetTime = currentTime + (distFromHitY / SPEED);
+            }
+        });
+
+        window.addEventListener('mouseup', (e) => {
+            if (!isMouseDown) return;
+
+            const rect = canvas.getBoundingClientRect();
+            const clickX = e.clientX - rect.left;
+            const clickY = e.clientY - rect.top;
+
+            const moveDist = Math.hypot(clickX - mouseStartPos.x, clickY - mouseStartPos.y);
+            if (moveDist < 4 && !draggingNote) {
+                handleCanvasClick(clickX, clickY);
+            }
+
+            draggingNote = null;
+            dragEdge = null;
+            isMouseDown = false;
+        });
+
+        function handleCanvasClick(clickX, clickY) {
+            const hitY = CANVAS_HEIGHT - KEYBOARD_HEIGHT;
+            const clickedKey = getTargetKeyByX(clickX, clickY, hitY);
+            if (!clickedKey) return;
+
+            if (clickY >= hitY) {
+                playPianoSound(clickedKey.midi, 0.5);
+                return;
+            }
+
+            const hitResult = hitTestNoteEdge(clickX, clickY);
+
+            if (editMode === 'delete' || (hitResult && hitResult.edge === 'center')) {
+                if (hitResult) {
+                    const idx = notesData.indexOf(hitResult.note);
+                    if (idx >= 0) notesData.splice(idx, 1);
+                }
+            } else if (!hitResult) {
+                const distFromHitY = hitY - clickY;
+                const targetTime = currentTime + (distFromHitY / SPEED);
+                const lengthMult = parseFloat(document.getElementById('lengthSlider').value);
+
+                notesData.push({
+                    midi: clickedKey.midi,
+                    targetTime: targetTime,
+                    hand: currentHand,
+                    lengthMult: lengthMult,
+                    played: false
+                });
+                playPianoSound(clickedKey.midi, lengthMult * 0.4);
+            }
+        }
+
+        function drawKeyboard() {
+            const kbY = CANVAS_HEIGHT - KEYBOARD_HEIGHT;
+
+            keys.filter(k => !k.isBlack).forEach(k => {
+                ctx.save();
+                if (k.active) {
+                    ctx.fillStyle = k.activeColor;
+                    ctx.shadowColor = k.activeColor;
+                    ctx.shadowBlur = 25;
+                } else {
+                    ctx.fillStyle = '#eeeeee';
+                }
+                ctx.strokeStyle = '#222222';
+                ctx.fillRect(k.x, kbY, k.width, KEYBOARD_HEIGHT);
+                ctx.strokeRect(k.x, kbY, k.width, KEYBOARD_HEIGHT);
+                ctx.restore();
+            });
+
+            keys.filter(k => k.isBlack).forEach(k => {
+                ctx.save();
+                if (k.active) {
+                    ctx.fillStyle = k.activeColor;
+                    ctx.shadowColor = k.activeColor;
+                    ctx.shadowBlur = 25;
+                } else {
+                    ctx.fillStyle = '#111111';
+                }
+                ctx.strokeStyle = '#000000';
+                ctx.fillRect(k.x, kbY, k.width, KEYBOARD_HEIGHT * 0.6);
+                ctx.strokeRect(k.x, kbY, k.width, KEYBOARD_HEIGHT * 0.6);
+                ctx.restore();
+            });
+
+            ctx.save();
+            const rainbowGrad = ctx.createLinearGradient(0, kbY, CANVAS_WIDTH, kbY);
+            rainbowGrad.addColorStop(0, '#ff0055');
+            rainbowGrad.addColorStop(0.2, '#ff9900');
+            rainbowGrad.addColorStop(0.4, '#33ff55');
+            rainbowGrad.addColorStop(0.6, '#00ccff');
+            rainbowGrad.addColorStop(0.8, '#9933ff');
+            rainbowGrad.addColorStop(1, '#ff00aa');
+
+            ctx.fillStyle = rainbowGrad;
+            ctx.shadowColor = '#00ffff';
+            ctx.shadowBlur = 10;
+            ctx.fillRect(0, kbY - 3, CANVAS_WIDTH, 4);
+            ctx.restore();
+        }
+
+        function drawCapsuleNote(x, y, width, height) {
+            const radius = Math.min(width / 2, height / 2);
+            ctx.beginPath();
+            ctx.moveTo(x + radius, y);
+            ctx.arcTo(x + width, y, x + width, y + height, radius);
+            ctx.arcTo(x + width, y + height, x, y + height, radius);
+            ctx.arcTo(x, y + height, x, y, radius);
+            ctx.arcTo(x, y, x + width, y, radius);
+            ctx.closePath();
+        }
+
+        function renderSingleNote(note, theme, hitY) {
+            const keyInfo = keys.find(k => k.midi === note.midi);
+            if (!keyInfo) return;
+
+            const noteHeight = BASE_ROW_HEIGHT * (note.lengthMult || 1);
+            let noteBottomY = hitY - ((note.targetTime - currentTime) * SPEED);
+            let noteTopY = noteBottomY - noteHeight;
+
+            const isBlack = keyInfo.isBlack;
+
+            let glowColor, grad;
+            ctx.save();
+
+            let width, x;
+            if (isBlack) {
+                width = Math.max(keyInfo.width * 0.8, 3);
+                x = keyInfo.x + (keyInfo.width - width) / 2;
+            } else {
+                width = Math.max(keyInfo.width * 0.7, 4);
+                x = keyInfo.x + (keyInfo.width - width) / 2;
+            }
+
+            if (theme.isGradMode) {
+                const palette = note.hand === 'left' ? theme.left : theme.right;
+                glowColor = palette.glow;
+
+                grad = ctx.createLinearGradient(0, noteTopY, 0, noteBottomY);
+                grad.addColorStop(0, palette.stops[0]);
+                grad.addColorStop(0.5, palette.stops[1]);
+                grad.addColorStop(1, palette.stops[2]);
+            } else {
+                const palette = note.hand === 'left' ? theme.left : theme.right;
+                const baseColor = isBlack ? palette.blackBase : palette.whiteBase;
+                glowColor = isBlack ? palette.blackGlow : palette.whiteGlow;
+
+                grad = ctx.createLinearGradient(0, noteTopY, 0, noteBottomY);
+                grad.addColorStop(0, '#ffffff');
+                grad.addColorStop(0.35, glowColor);
+                grad.addColorStop(1, baseColor);
+            }
+
+            if (noteBottomY >= hitY && noteTopY <= hitY) {
+                keyInfo.active = true;
+                keyInfo.activeColor = glowColor;
+
+                if (isPlaying && !note.played) {
+                    playPianoSound(note.midi, (note.lengthMult || 1) * 0.4);
+                    note.played = true;
+                }
+            }
+
+            if (noteBottomY > -1000 && noteTopY < hitY) {
+                ctx.shadowColor = glowColor;
+                ctx.shadowBlur = 15;
+                ctx.fillStyle = grad;
+
+                drawCapsuleNote(x, noteTopY, width, noteHeight);
+                ctx.fill();
+
+                if (isBlack) {
+                    ctx.shadowBlur = 0;
+                    ctx.strokeStyle = '#050508';
+                    ctx.lineWidth = 1.8;
+                    ctx.stroke();
+                }
+
+                ctx.restore();
+            } else {
+                ctx.restore();
+            }
+        }
+
+        function drawNotes() {
+            const hitY = CANVAS_HEIGHT - KEYBOARD_HEIGHT;
+            const themeKey = document.getElementById('themeSelect').value;
+            const theme = colorThemes[themeKey] || colorThemes.pinkGrad;
+
+            keys.forEach(k => k.active = false);
+
+            const whiteNotes = [];
+            const blackNotes = [];
+
+            notesData.forEach(note => {
+                const keyInfo = keys.find(k => k.midi === note.midi);
+                if (keyInfo) {
+                    if (keyInfo.isBlack) {
+                        blackNotes.push(note);
+                    } else {
+                        whiteNotes.push(note);
+                    }
+                }
+            });
+
+            whiteNotes.forEach(note => renderSingleNote(note, theme, hitY));
+            blackNotes.forEach(note => renderSingleNote(note, theme, hitY));
+        }
+
+        function render(timestamp) {
+            if (!lastTimestamp) lastTimestamp = timestamp;
+            if (isPlaying) currentTime += (timestamp - lastTimestamp) / 1000;
+            lastTimestamp = timestamp;
+
+            if (hasBgVideo && bgVideo.readyState >= 2) {
+                ctx.drawImage(bgVideo, 0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+                ctx.fillStyle = 'rgba(5, 5, 8, 0.60)';
+                ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+            } else {
+                ctx.fillStyle = '#050508';
+                ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+            }
+
+            drawNotes(); 
+            drawKeyboard();
+
+            requestAnimationFrame(render);
+        }
+
+        function togglePlay() {
+            initAudioEngine();
+            isPlaying = !isPlaying;
+
+            if (isPlaying) {
+                notesData.forEach(n => {
+                    if (n.targetTime >= currentTime - 0.05) {
+                        n.played = false;
+                    }
+                });
+            }
+
+            if (hasBgVideo) {
+                if (isPlaying) bgVideo.play();
+                else bgVideo.pause();
+            }
+        }
+
+        function resetAnim() {
+            isPlaying = false;
+            currentTime = 0;
+            notesData.forEach(n => n.played = false);
+            if (hasBgVideo) {
+                bgVideo.currentTime = 0;
+                bgVideo.pause();
+            }
+        }
+
+        let mediaRecorder, recordedChunks = [], isRecording = false;
+        function toggleRecord() {
+            initAudioEngine();
+            const btn = document.getElementById('recBtn');
+            if (!isRecording) {
+                recordedChunks = [];
+                const stream = canvas.captureStream(60);
+
+                mediaRecorder = new MediaRecorder(stream, { mimeType: 'video/webm' });
+                mediaRecorder.ondataavailable = e => recordedChunks.push(e.data);
+                mediaRecorder.onstop = () => {
+                    const a = document.createElement('a');
+                    a.href = URL.createObjectURL(new Blob(recordedChunks, { type: 'video/webm' }));
+                    a.download = 'piano_notes_video.webm'; a.click();
+                };
+                resetAnim();
+                if (hasBgVideo) bgVideo.play();
+                mediaRecorder.start(); isRecording = true; isPlaying = true;
+                btn.innerText = '⏹ 録画停止＆保存'; btn.style.background = '#880000';
+            } else {
+                mediaRecorder.stop(); isRecording = false; isPlaying = false;
+                if (hasBgVideo) bgVideo.pause();
+                btn.innerText = '🎬 動画録画開始'; btn.style.background = '#cc0000';
+            }
+        }
+
+        window.addEventListener('click', () => {
+            initAudioEngine();
+        }, { once: true });
+
+        window.addEventListener('load', () => {
+            initAudioEngine();
+        });
+
+        requestAnimationFrame(render);
+    </script>
+</body>
+</html>
